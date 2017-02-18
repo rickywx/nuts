@@ -1,0 +1,833 @@
+<html>
+  <head>
+    <meta charset="utf-8">
+    <script type="text/javascript">
+    /** Main App Module *****************************************************************/
+      var Nuts = (function() {
+        var logs = [];
+        var ui = {};
+        var settings = {};
+        var logTable = null;
+        var selectedDate = null;
+        const STORAGE_PREFIX = 'NUTS-';
+        const EDIT_LOG_BTN_ID_PREFIX = 'editLogBtn';
+
+        function getSelectedDate() {
+          return selectedDate;
+        }
+
+        function getStorageKey() {
+          return STORAGE_PREFIX + getSelectedDate();
+        }
+        
+        function clearLogInputs() {
+          ui.foodInput.value = "";
+          ui.foodGramsInput.value = "";
+          ui.nutrientGramsInput.value = "";
+        }
+
+        function setSelectedDate(newDateStr) {
+          selectedDate = newDateStr;
+          logs = localStorage[getStorageKey()] ? JSON.parse(localStorage[getStorageKey()]) : [];
+          if(ui && ui.logTable) { //TODO is this check really necessary?
+            updateLogUI();
+            ui.headerText.innerHTML = newDateStr;
+            clearLogInputs();
+          }
+        }
+
+        function getStoredLogDates() {
+          var resultArray = [];
+          for(var storageItem in localStorage) {
+            if(storageItem.startsWith(STORAGE_PREFIX) && storageItem.match(/\d{4}-\d{2}-\d{2}/)) {
+              var storageDate = storageItem.slice(STORAGE_PREFIX.length);
+              resultArray.push(storageDate);
+            }
+          }
+          return resultArray;
+        }
+
+        function init(newDateStr) {
+          //TODO loadSettings
+          if(!settings.hasOwnProperty("keepMenuOpen")) { //initialize keepMenuOpen prop if it doesn't already exist
+            settings.keepMenuOpen = window.innerWidth > 600;
+          }
+          ui.logTable = document.querySelector('#logTable');
+          ui.getLogTableTBody = function() { return ui.logTable.tBodies[0] }; //can replace all rows in 1 shot //Assumes only 1 tbody
+          ui.nutrientTotalLabel = document.querySelector('#nutrientTotal');
+          ui.foodInput = document.querySelector('#food');
+          ui.foodGramsInput = document.querySelector('#foodGrams');
+          ui.nutrientGramsInput = document.querySelector('#nutrientGrams');
+          ui.dateMenu = document.querySelector('#dateMenu');
+          ui.menuPanel = document.querySelector('#menuPanel');
+          ui.headerText = document.querySelector('#headerText');
+          ui.foodDataList = document.querySelector('#foodDataList');
+          ui.addLogButton = document.querySelector('#addButton');
+          setSelectedDate(newDateStr);
+          ui.headerText.innerHTML = getSelectedDate();
+          document.querySelector('#navMenuButton').addEventListener('click', headerMenuButtonClicked);
+          document.querySelector('#headerText').addEventListener('click', headerMenuButtonClicked);
+          document.querySelector('.closebtn').addEventListener('click', closeButtonClicked);
+          ui.foodInput.addEventListener('change', foodInputChanged);
+          ui.foodGramsInput.addEventListener('change', foodInputChanged);
+          ui.foodInput.addEventListener('keypress', foodInputKeyPressed);
+          ui.foodGramsInput.addEventListener('keypress', foodInputKeyPressed);
+          ui.nutrientGramsInput.addEventListener('keypress', foodInputKeyPressed);
+          ui.addLogButton.addEventListener("click", addLogButtonClicked);
+          
+          updateLogUI();
+
+        }
+        
+        function addLogButtonClicked() {
+          if(!ui.foodInput.value) {
+            ui.foodInput.focus();
+            ui.foodInput.select();
+          } else if(!ui.foodGramsInput.value) {
+            ui.foodGramsInput.focus();
+          } else {
+            updateNutrientGramsInput();
+            Nuts.addLog({"food":ui.foodInput.value,"foodGrams": ui.foodGramsInput.value});
+          }
+        }
+        
+        function foodInputKeyPressed(event) {
+          var key=event.keyCode || event.which;
+          if (key==13){
+            ui.addLogButton.click();
+          }  
+        }
+        
+        function updateNutrientGramsInput() {
+          let nutrientGrams = totalNutrientGrams({
+            "food": ui.foodInput.value, 
+            "foodGrams": ui.foodGramsInput.value
+          }).toFixed(1);
+          if(nutrientGrams > 0) {
+            ui.nutrientGramsInput.value = nutrientGrams;
+          }
+        }
+        
+        function foodInputChanged() {
+          updateNutrientGramsInput();
+          this.value = this.value.toLocaleUpperCase(); //upcase the text entered
+        }
+
+        function saveLogs() {
+          localStorage[getStorageKey()] = JSON.stringify(logs);
+        }
+        
+        function addLog(log) {
+          if(!log) return;
+          if(!log.date) {
+            log.date = getSelectedDate();
+          }
+          logs.push(log);
+          saveLogs();
+          
+          let food = {"name": log.food};
+          if(log.foodGrams && Number(log.foodGrams) > 0) {
+            food.protein = Number(ui.nutrientGramsInput.value) / Number(log.foodGrams);
+          }
+          Foods.addOrUpdate(food);
+
+          updateLogUI();
+          clearLogInputs();
+        };
+
+        function clearLogTableRows() {
+          var newTBody = document.createElement('tbody');
+          ui.getLogTableTBody().parentNode.replaceChild(newTBody, ui.getLogTableTBody());
+        }
+
+        /* function getNutrientTotal() {
+            var total = 0;
+            for(var i in logs) {
+              total += Number(logs[i].nutrientGrams);
+            }
+            return total;
+        } */
+
+        function editLogClicked() {
+          var idx = this.id.replace(EDIT_LOG_BTN_ID_PREFIX, "");
+          ui.foodInput.value = logs[idx].food;
+          ui.foodGramsInput.value = logs[idx].foodGrams;
+          //if(logs[idx].nutrientGrams) {
+            ui.nutrientGramsInput.value = totalNutrientGrams(logs[idx]).toFixed(1);
+          //}
+          logs.splice(idx, 1);
+          saveLogs();
+          updateLogUI();
+          ui.foodInput.focus();
+          ui.foodInput.select();
+        }
+
+        function dateMenuItemClicked() {
+          setSelectedDate(this.innerHTML);
+          if(!settings.keepMenuOpen) {
+            closeButtonClicked();
+          }
+        }
+
+        function headerMenuButtonClicked() {
+          ui.menuPanel.style.width = "250px";
+          showDateMenu();
+        }
+        
+        function closeButtonClicked() {
+          ui.menuPanel.style.width = "0px";
+        }
+
+        function showDateMenu() {
+          var logDates = getStoredLogDates();
+          console.log(logDates);
+          ui.dateMenu.innerHTML = '';
+          for(var i in logDates) {
+            var newListItem = document.createElement('li');
+            var newAnchor = document.createElement('a');
+            newAnchor.innerHTML = logDates[i];
+            newAnchor.href = "#";
+            newAnchor.addEventListener('click', dateMenuItemClicked);
+            newListItem.appendChild(newAnchor);
+            ui.dateMenu.appendChild(newListItem);
+          }
+        }
+        
+        /* TODO filter the logs for a specific date 
+        * if no logItems passed in, use the entire logs list
+        * TODO try using reduce()
+        */
+        function totalNutrientGrams(...logItems) {
+          if(logItems && logItems.length === 0) {
+            logItems = logs; 
+          }
+          let result = 0.0;
+          logItems.forEach(function(log) {
+            let foundFood = Foods.foodList().find((food) => food.name === log.food); //Foods.findByName(log.food);
+            if(foundFood && foundFood.protein && log.foodGrams) {
+              //let food = foundFoods[0]; //TODO what if there's more than 1 result?
+              let nutrientGrams = Number(foundFood.protein) * Number(log.foodGrams);
+              result += nutrientGrams;
+            }
+          });
+          return result;
+        }
+        
+        /* if multiple items are returned from findByName, assumes the first item is the one we want */
+        /* function calcNutrientGrams(foodName, foodGrams) {
+          let foundFoods = Foods.findByName(foodName);
+          if(foundFoods && foundFoods.length > 0) { // && foundFoods[0].protein && foodGrams) {
+            //let food = foundFoods[0]; 
+            return Number(foundFoods[0].protein) * Number(foodGrams);
+          }
+          return undefined;
+        } */
+
+        function updateLogUI() {
+          //var rowIdx = 2;
+          clearLogTableRows();
+          for(var logIdx=0;logIdx<logs.length;logIdx++) {
+            var row = ui.getLogTableTBody().insertRow(logIdx);
+            var colIdx = 0;
+            row.insertCell(0).innerHTML = logs[logIdx].food;
+            let foodGramCell = row.insertCell(1); 
+            foodGramCell.innerHTML = logs[logIdx].foodGrams;
+            foodGramCell.className += " numberCell";
+            let nutrientGramCell = row.insertCell(2);
+            nutrientGramCell.innerHTML = totalNutrientGrams(logs[logIdx]).toFixed(1);
+            nutrientGramCell.className += " numberCell";
+            var btn = document.createElement("button");
+            btn.id = EDIT_LOG_BTN_ID_PREFIX + logIdx;
+            btn.addEventListener("click", editLogClicked);
+            btn.className = "editBtn";
+            row.insertCell(3).appendChild(btn);
+          }
+          ui.nutrientTotalLabel.innerHTML = totalNutrientGrams().toFixed(1);
+        };
+
+        return {
+          init: init,
+          addLog: addLog,
+          STORAGE_PREFIX: STORAGE_PREFIX,
+          storageKey: getStorageKey,
+          selectedDate: getSelectedDate,
+          setSelectedDate: setSelectedDate,
+          EDIT_LOG_BTN_ID_PREFIX: EDIT_LOG_BTN_ID_PREFIX,
+          getStoredLogDates: getStoredLogDates,
+          totalNutrientGrams: totalNutrientGrams
+        };
+      }());
+
+/** Foods Module ***********************************************************************************************************************/
+      var Foods = (function() {
+          var foods = [];
+          var ui = {};
+          var commonFoods = [];
+
+          function getStorageKey() {
+            return Nuts.STORAGE_PREFIX + 'foods';
+          }
+
+          function init() {
+            ui.foodDataList = document.querySelector('#foodDataList');
+            ui.foodInput = document.querySelector('#food');
+            
+            loadCommonFoods();
+            let customFoods = localStorage[getStorageKey()] ? JSON.parse(localStorage[getStorageKey()]) : [];
+            addOrUpdate(...customFoods); //spread the array when passed to a spread parameter, otherwise it is passed in as an array object
+            //TODO clear dataList first
+            addToDataList(foods);
+          }
+
+          /* Copy the list so it cannot be modified; make it immutable. This is good encapsulation, but it prevents mocking the foodList (?) */
+          function foodList() {
+            return [ ...foods ]; //ES2016's new spread operator, expanding an array
+          }
+
+          //TODO Array.filter might be a better solution. With filter, this method may not be necessary
+          function findByName(partialName) {
+            var resultList = [];
+            if(partialName) for(var food in foods) {
+              if(foods[food].name.toLowerCase().indexOf(partialName.toLowerCase()) >= 0 ) {
+                resultList.push(foods[food]);
+              }
+            }
+            return resultList;
+          }
+          
+          /* executed for *every* addLog. Is it a problem if we are rewriting the food even when it hasn't changed? 
+          We could check the food to see if it's changed, but we have to check *all* of the properties, even props we don't know exist yet
+          (possible, I suppose if we iterate through the properties) */
+          function addOrUpdate(...foodsToAdd) { //TODO
+            foodsToAdd.forEach( function(foodToAdd) {
+              let index = foods.findIndex((food) => food.name === foodToAdd.name);
+              if(index >= 0) {
+                foods[index] = foodToAdd; 
+              } else {
+                foods.push(foodToAdd);
+                addToDataList(foodToAdd);
+              }
+            });
+            saveCustomFoods();
+          }
+          
+          function addToDataList(...foodsToAdd) {
+            foodsToAdd.forEach( function(food) {
+              let option = document.createElement("option");
+              option.value = food.name;
+              ui.foodDataList.appendChild(option);
+            });
+          }
+          
+          function saveCustomFoods() {
+            let customFoods = [];
+            foods.forEach( function(food) {
+              if(!commonFoods.find((commonFood) => commonFood.name === food.name)) {
+                customFoods.push(food);
+              }
+            });
+            localStorage[getStorageKey()] = JSON.stringify(customFoods);
+          }
+          
+          function loadCommonFoods() {
+            let request = new XMLHttpRequest(); 
+            request.onreadystatechange = function(response) {
+              if(request.readyState === 4) {
+                if(request.status === 200) {
+                  commonFoods = JSON.parse(request.responseText);
+                  addOrUpdate(...commonFoods);
+                } else {
+                  // An error occured :(
+                  foodInput.placeholder = "Couldn't load datalist options :(";
+                }
+              }
+            };
+            //foodInput.placeholder = "Loading options...";
+            
+            request.open('GET', 'commonFoods.json', true);
+            request.send();
+          }
+          
+          return { 
+            init: init,
+            foodList: foodList,
+            getStorageKey: getStorageKey,
+            findByName: findByName,
+            addOrUpdate: addOrUpdate
+          };
+      }());
+
+/** Tests **********************************************************************************************************************/
+      var SmokeTest = (function() {
+
+        function init(testSuite) {
+          console.assert(testSuite.runTests);
+          var btn = document.createElement("BUTTON");
+          btn.addEventListener("click", testSuite.runTests);
+          var testDiv = document.createElement("div");
+          var textNode = document.createTextNode("Run Tests");
+          btn.appendChild(textNode);
+          testDiv.appendChild(btn);
+          document.body.appendChild(testDiv);
+        }
+
+        return { init: init }
+      }());
+
+      /** Unlike unit tests, these smoketests are not necessarily designed to be
+      * stateless for each test method, but maintaining state through the entire suite
+      * of tests is ok, as long as you clean up at the end.
+      */
+      var NutsSmokeTest = (function(Nuts) {
+        var ui = {};
+        const SEP_31 = '2016-09-31';
+        var FEB_30 = '2016-02-30';
+        const MILK = 'Milk (test)';
+        const RICE = 'Rice (test)';
+        const PEACH = 'Peach (test)';
+        const BANANAS = 'BANANAS,RAW';
+
+        function setup() {
+          cleanup(); //just in case. This won't hurt anything right now
+          setupFoods();
+          Nuts.init(SEP_31); //use a fake date so it won't interfere with test data
+        }
+
+        function cleanup() {
+          localStorage.removeItem(Nuts.STORAGE_PREFIX + SEP_31); //clear data
+          localStorage.removeItem(Nuts.STORAGE_PREFIX + FEB_30); //clear data
+        }
+
+        function runTests() {
+          setup();
+          runFoodsTests();
+          
+          shouldAddLog();
+          shouldUpdateAnExistingFood();
+          shouldSetDate();
+          shouldCalcNutrientTotal();
+          shouldPopulateInputsOnEditClick();
+          shouldClearInputsOnAddClick();
+          shouldListStoredLogDates();
+          shouldDisplayDateMenu();
+          cleanup();
+        }
+
+        function setupFoods() {
+          Foods.init();
+          Foods.addOrUpdate({"name": MILK});
+          Foods.addOrUpdate({"name": RICE});
+          Foods.addOrUpdate({"name": "Bread (test)"});
+        }
+        
+        function runFoodsTests() {
+          shouldFindFood();
+          shouldAddFood();
+          shouldSaveCustomFoods();
+        }
+
+        /** assumes common & custom foods already loaded by Foods.init()
+         *  methods tested: findByName(), init(), loadCommonFoods(), loadCustomFoods()
+         */
+        function shouldFindFood() {
+          let milkResult = Foods.findByName(MILK);
+          console.assert(milkResult[0].name === MILK,{"MILK": MILK, "milk.name": milkResult.name}, milkResult);
+          let riceResult = Foods.findByName(RICE);
+          console.assert(riceResult[0].name === RICE);
+          let bananasResult = Foods.findByName(BANANAS);
+          console.assert(bananasResult[0].name === BANANAS);
+        }
+        
+        /** methods tested addOrUpdate(), addToDataList()
+         **/
+        function shouldAddFood() {
+          Foods.addOrUpdate({"name": BANANAS});
+          console.assert(Foods.foodList().find((food) => food.name === BANANAS, Foods.foodList));
+          
+          //ensure datalist is updated
+          let foodDataList = document.getElementById("foodDataList");
+          let found = false;
+          for(let i=0;i<foodDataList.options.length;i++) {
+            if(foodDataList.options[i].value === BANANAS) {
+              found = true;
+            }
+          }  
+          console.assert(found,  foodDataList.options);
+        }
+        
+        function shouldSaveCustomFoods() {
+          Foods.addOrUpdate({"name": "peach"});
+          let foodstr = localStorage[Foods.getStorageKey()];
+          console.assert(typeof(foodstr) === "string", typeof(foodstr));
+          console.assert(foodstr.indexOf("peach") > 0, foodstr.indexOf("peach"), foodstr);
+        }
+
+        function shouldAddLog() {
+          document.getElementById("nutrientGrams").value = 2.4;
+          let testLog = {"food": RICE, "foodGrams":"100"};
+          Nuts.addLog(testLog);
+          document.getElementById("nutrientGrams").value = 3.4;
+          let testLog2 = {"food": MILK, "foodGrams":"100"};
+          Nuts.addLog(testLog2);
+          console.assert(Foods.findByName(RICE)[0].name === RICE);
+          console.assert(Foods.findByName(RICE)[0].protein === 0.024);
+          let storageStr = localStorage[Nuts.storageKey()];
+          console.assert(storageStr);
+          let resultLogs = JSON.parse(storageStr);
+          console.assert(resultLogs[0].food === testLog.food, storageStr, resultLogs[0].food, testLog.food);
+          console.assert(resultLogs[0].foodGrams ===testLog.foodGrams, storageStr, resultLogs[0].foodGrams, testLog.foodGrams);
+          let logTable = document.querySelector('#logTable');
+          console.assert(logTable.rows.length > 1, {"logTable.rows.length": logTable.rows.length}  );
+        }
+        
+        function shouldUpdateAnExistingFood() {
+          document.getElementById("nutrientGrams").value = 1.0;
+          let testLog = {"food": MILK, "foodGrams":"100"};
+          Nuts.addLog(testLog);
+          let milk1 = Foods.findByName(MILK)[0];
+          console.assert(milk1.protein === 0.01, milk1.protein);
+          
+          document.getElementById("nutrientGrams").value = 3.4;
+          let testLog2 = {"food": MILK, "foodGrams":"100"};
+          Nuts.addLog(testLog2);
+          let milk2 = Foods.findByName(MILK)[0];
+          console.assert(milk2.protein === 0.034, milk2.protein);
+        }
+
+        function shouldSetDate() {
+          // var testLog = {"food":"Milk (test)", "nutrientAmount":"3.4"};
+          // Nuts.addLog(testLog);
+
+          console.assert(Nuts.selectedDate() === SEP_31, Nuts.selectedDate());
+        }
+
+        function shouldCalcNutrientTotal() {
+          Foods.addOrUpdate({"name": RICE, "protein": 0.024});
+          Foods.addOrUpdate({"name": MILK, "protein": 0.034});
+          let total = Nuts.totalNutrientGrams(
+            {"food":RICE,"foodGrams":"100"},
+            {"food":MILK,"foodGrams":"100"}
+          ).toFixed(1);
+          console.assert(total == 5.8, total);
+        }
+
+        function shouldPopulateInputsOnEditClick() {
+          document.querySelector('#' + Nuts.EDIT_LOG_BTN_ID_PREFIX + '0').click();
+          console.assert(document.querySelector('#food').value);
+        }
+
+        function shouldClearInputsOnAddClick() {
+          document.querySelector('#addButton').click();
+          console.assert(!document.querySelector('#food').value);
+        }
+
+        function shouldListStoredLogDates() {
+          Nuts.setSelectedDate(FEB_30);
+          const APPLE = "apple (test)";
+          document.getElementById("nutrientGrams").value = 0.5;
+          Nuts.addLog({"food":APPLE,"foodGrams": 50});
+          //Foods.addOrUpdate({"name": APPLE, "nutrientPerFoodGram": 0.01}); //TODO instead of this, it should add & calc nutrients when added
+          var storedLogDates = Nuts.getStoredLogDates();
+          console.assert(storedLogDates.length > 1, Nuts.getStoredLogDates());
+          console.assert(storedLogDates[0] === FEB_30,storedLogDates[0],FEB_30);
+          console.assert(Nuts.totalNutrientGrams() == 0.01 * 50, Nuts.totalNutrientGrams());
+        }
+        
+        function shouldDisplayDateMenu() {
+          document.querySelector("#headerText").click();
+          console.assert(document.querySelectorAll("#dateMenu li").length > 0, document.querySelectorAll("#dateMenu li"));
+        }
+        
+        return {
+          runTests: runTests
+        }
+
+      }(Nuts));
+
+      window.addEventListener("load", function() {
+        Foods.init();
+        //SmokeTest.init(NutsSmokeTest);
+        Nuts.init(new Date().toISOString().substr(0,10));
+      });
+
+      /** DONE BANE **********************
+      * (name releases after sith lords ;) )
+      * smoke test suite
+      * display date
+      * display nutrient total
+      * dynamic date (currently hard-coded; default to current date)
+      * copy & paste data (test on a mobile device)
+      * edit/delete a row
+      * critical styling only (maybe only page header)
+      * empty the input boxes after clicking add
+
+      ** DONE MAUL ****************************
+      * release to neocities
+      * I think it might be better to add the ui elements from a method within Nuts rather than passing them in? Can't really see any reason to pass them in.
+      * nav menu: select a date or enter a date, settings, nutrient summary page
+      * date change event
+      * copy/paste copies & pastes the 'Edit' button text too. How to avoid? Use an icon instead of text. Use a span styled as a button? Is there a property to fix this? Or separate print page?
+      *
+      ** DONE VADER ***************************
+      * * custom food list
+      * * food picklist - check this out: http://blog.teamtreehouse.com/creating-autocomplete-dropdowns-datalist-element
+      * * nutrientGrams should be uneditable by default. Normally it will be calculated from the list.
+      * * Store foodGrams with log.
+      * * calculate nutrient grams = foodGrams * nutrientPerFoodGram
+      * * Display nutrientGram total.
+      * * Calculate nutrientPerFoodGram.
+      * * Store nutrientPerFoodGram with food.
+      * * Ensure we have a test for storing nutrientPerFoodGram
+      * * need to make a decision on storing foods: should I use the nutrient name as the nutrientPerFoodGram property? I think this simplifies. It could
+      * *   make it less flexible, although I don't think that really applies in this javascript...
+      * * number input types (if possible)
+      * * add an image to the edit button
+      * * BUG A food menu option is showing up in the date menu. We may want to have a menu option to edit the food list, 
+      *     but this one is just being read from localStorage and that's not how it should work 
+      * * BUG nutrientGrams is not always correct
+      * * release to neocities
+      * * save a local backup
+      * * thorough testing
+      * * shrink width just a tiny bit
+      * * common food list
+      * * upper case everything so we don't have to worry about case
+      * remove test button
+      * * pencil image and app icon
+      * * create phonegap app
+      * user testing :)
+      * * make sure that the foodlist search checks both common list and custom list
+      * * make sure that the commonfoods are not saved to the custom food list unless they are modified (it is being saved - need to FIX)
+      * * cut off the food name display in the table so it doesn't expand the table. Can we fix the col widths? Actually, use pct instead of px so it will                expand depending on the display
+      * * I think we probably shouldn't fire the onenter event on every edit box. Not the food dropdown.
+      * * prevent it from adding blank recs
+      * * add on enter
+      *
+      * DONE Caedus ***************************************************************
+      * * update the date menu so that it slides from the side
+      * * menu dates are readded each time the menu is opened
+      * * menu does not open by clicking on the header text
+      * * clean up css
+      * * make it easier to use on a mobile device (larger boxes to click on, etc)
+      * * put date menu on the left; slide the menu from the left like inbox. Thus for
+      *     PCs, it will appear as a menu, but for phones it will be like a new page.
+      * * style & layout
+      * * more attractive interface (possibly using very lightweight graphics)
+      * * responsive layout - so that it expands when you increase the size of the display to better use the space - but only up to a certain point
+      * * backup
+      * * close the menu automatically after a menu choice is selected.
+      * * header needs to be taller; too hard to click
+      * * unicode menu char not available; use an alternative character or img or html/css
+      * * add and edit buttons are kinda small. Bigger buttons would be better.
+      * * nut(g) is only updated when I focus it. What if I type grams and then immediately hit the add button? It doesn't get saved.
+      * * phonegap
+      * 
+      ** TODO ROGUE ONE - Intermediate refactoring ********************************
+      * Refactor: check each method. See where it's used. determine if it's necessary. Determine if it can be improved.
+      * meh. Just make sure 1) tests are stateless - whether individual or collectively, 2) we have appropriate coverage
+      * * Foods coverage
+      * Nuts coverage
+      * check test coverage - make sure each method is tested (ideally each branch, but we'll settle for each method)
+      * Run some manual tests and if they uncover anything make them into automated tests
+      * * move addEventListener so all we can call Nuts.init only //https://css-tricks.com/how-do-you-structure-javascript-the-module-pattern-edition/
+
+      * TODO Tyranus ****************************************************************
+      * If I click the add button but the Nut box has not been updated yet, make sure it gets updated before calculating
+      * add logs at the top of the list rather than the bottom so we see new ones (if the whole screen isn't in view)
+      * don't set the protein if we blank out or set the foodgrams to 0 when we calculate the protein
+      * food dropdown shows 'undefined' as one of the options
+      * get the app on play store
+      * print/copy/paste options
+      * refreshing the screen resets the totals back to 0 - need to recalculate when we reload the log
+      * 
+      * TODO Later releases ******************** (Sidious, then use villian names: Palpatine, Dooku, Grievous, Snoke, Kylo, Jabba)
+      * food search
+      * load & save settings object to localstorage
+      * monetization: ads? donations? in-app purchases like predefined list? I think I like donations. Make sure we have a donation page.
+      * Make nutrientGrams editable when there is no nutrientGramPerFoodGram in the food list or
+      * Make nutrientGrams editable onclick so it can be manually edited.
+      * if not found, need nutrient & nut amt. Show those inputs.
+      * create a build script for builds and deploys; put this in github now that we have a handful of files that make up the app
+      * use the title attributes to display the entirety of food names
+      * transmit data after it is entered so we know it has been entered
+      * add lookup link to search the usda database when foods are not found
+      * food editing page
+      * allow user to move logs to a different date
+      * It would be nice to use the total available space if we rotate the phone horizontally
+      * menu: keep the last week in the menu, but have older dates maybe appear in a submenu
+      * background color of the food dropdown is white. Do we want to change the color so we don't get blinded in the dark?
+      * allow for other nutrients
+      * reclicking the menu button should close the menu; but give them the option to leave the menu open all of the time for PCs.
+      * style the menu (more closely matches the app theme?)
+      * add a home icon to today's date in the menu. Add (today) in parens after the date
+      * get hydration working. does it need something in the phonegap properties file?
+      * determine how much a food is used and auto-remove unused foods
+      *   use that also to add the most commonly used foods to the common foods list
+      * food grams calculator / converter from other units (oz, piece, slice, etc) 
+      * create additional common lists - our current one is protein focused. Use others.
+      * separate modules into their own files
+      * open source the app
+      * email/text info to doctor / office: KISS to start; goal is to utilize phone's contacts. If we can just generate a mailto link, that might give us               what we need.
+      * contact(s) info page for sending the diet records (doctor's/nutritionists email)
+      * unit test suite // https://code.tutsplus.com/tutorials/testing-your-javascript-with-jasmine--net-21229
+      * manual FOOD add
+      * semi-automatic add (button to add log and to add food - or checkbox - or maybe a tap and hold button dropdown is best)
+      * store a default amount with each food - like when you eat a banana it's often the same amount. A simple impl would be to take the last value
+      *   a more accurate but more complicated impl would be to take the most common value
+      * the code is getting a little bit long, maybe we should split into a ui manager and a storage manager?
+      * predefined food list
+      * auto-add to custom food list if used more than 3 times? Then we would need a precustomlist, but it could be a good idea.
+      * smart predefined list - send custom lists to server and keep the most popular options
+      * nutrient summary page
+      * search the database silently in the background when a food is not found locally; add it to local.
+      * provide a more flexible init() method. If they don't pass in UI components, try to guess them or at least assume a name
+      * backend services, heroku, user accounts, etc
+      * clean unused foods out of custom list if not used for 90 days - localstorage space is limited.
+      * provide updates to know what food list foods are used so we can eliminate the unpopular ones
+      * Upgrade to ES6 where possible
+      * for integration tests - set it up so we can use a separate localStorage, so we don't break what already exists there.
+      *   Right now we are doing that by creating a fake date - 
+      *   but it doesn't do anything for the foods list (maybe we don't need to change foods and this is overkill?)
+      * different commonfoods for different age groups (infant, kids, teens, adults)
+      * common foods for a favorite/frequent restaurant?
+      */
+    </script>
+    <style>
+      body { background-color: darkslateblue; }
+      #mainPanel {
+        width: 340px;
+        margin: 0 auto;
+      }
+      #navMenuButton {
+        color: lightsteelblue;
+        background-color: transparent;
+        font-size: 32;
+        width: 10%;
+      }
+      #headerText { 
+        width: 67%;
+      }
+      #nutrientTotal {
+        width: 20%;
+        text-align: right;
+        padding-right: 2px;
+        display: inline-block;
+      }
+      .header {
+        display: inline-block;
+        font-size: x-large;
+        margin-bottom: 4px;
+      }
+      .headerButton {
+        cursor: pointer;
+        text-align: center;
+      }
+      #logTable, #headerText, #nutrientTotal {
+        background-color: lightsteelblue;
+        border-radius: 3px;        
+      }
+      #logTable, #header {
+        width: 100%;
+      }
+      #logTable {
+        table-layout: fixed;
+      }
+      .editBtn {
+        margin-left: 6px;
+        padding: 15px;
+        border: thin solid lightgray;
+        border-radius: 5px;
+        background: lavender url("pencil.png") no-repeat center center;
+        vertical-align:top;
+        cursor: pointer;
+      }
+      thead tr {
+        text-align: left;
+      }
+      td {
+        white-space: nowrap; 
+        overflow: hidden;
+      }
+      input {
+        display:block;
+        border-radius: 3px;
+        border: thin solid gray;
+        font-size: 20;
+      }
+      input[type=Number] { width: 100%; }
+      td input[type=Number] { width: 4em; }
+      #foodGramsCol, #nutrientGramsCol, #buttonCol {
+        width: 3em;
+      }
+      #food { 
+        width: 100%;
+        text-transform: uppercase;
+      }
+      #addButton { 
+        font-size: x-large;
+        margin-left: 6px;
+        cursor: pointer;
+      }
+      .numberCell {
+        text-align: right;
+      }
+      .sidenav {
+          height: 100%;
+          width: 0;
+          position: fixed;
+          z-index: 1;
+          top: 0;
+          left: 0;
+          background-color: #111;
+          overflow-x: hidden;
+          transition: 0.5s;
+          padding-top: 60px;
+      }
+      .sidenav a {
+          padding: 2px 8px 2px 32px;
+          text-decoration: none;
+          font-size: 25px;
+          color: #818181;
+          display: block;
+          transition: 0.3s
+      }
+      .sidenav a:hover, .offcanvas a:focus{
+          color: #f1f1f1;
+      }
+      .sidenav .closebtn {
+          position: absolute;
+          top: 0;
+          right: 25px;
+          font-size: 36px;
+          margin-left: 50px;
+      }
+      @media screen and (max-height: 450px) {
+        .sidenav {padding-top: 15px;}
+        .sidenav a {font-size: 18px;}
+      }
+    </style>
+  </head>
+  <body>
+    <div id="mainPanel">
+      <div id="header">
+        <div id="navMenuButton" class="header headerButton">&equiv;</div> <!-- &#9776; -->
+        <span id="headerText" class="header headerButton">Menu</span>
+        <span id="nutrientTotal" class="header">Nutrient Total</span>
+      </div>
+      <div id="logPane">
+        <table id="logTable">
+          <thead><tr><th id="foodCol">Food</th><th id="foodGramsCol">grams</th><th id="nutrientGramsCol">Nut(g)</th><th id="buttonCol"></th></tr>
+          <tr>
+              <th><input id="food" list="foodDataList" /></th>
+              <th><input id="foodGrams" type="number" /></th>              
+              <th><input id="nutrientGrams" type="number" /></th>
+              <th><button id="addButton">+</button></th>
+          </tr></thead>
+          <tbody id="logTBody"><tr></tr></tbody>
+        </table>
+      </div>
+      <nav id="menuPanel" class="sidenav" role="navigation"><a href="javascript:void(0)" class="closebtn">&times;</a><ul id="dateMenu" ></ul></nav>
+      <!-- TODO should create the close button on the fly in JS -->
+    </div>
+    <datalist id="foodDataList"></datalist>
+  </body>
+</html>
