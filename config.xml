@@ -3,6 +3,6 @@
 	<name>Nuts</name>
 	<description>Nutrient Tracker and Calculator</description>
 	<author email="rickyw@bigfoot.com" href="http://phonegap.com">Richard Wilcox</author>
-	<preference name="phonegap-version" value="cli-6.3.0" />
+	<preference name="phonegap-version" value="cli-6.5.0" />
 	<icon src="icon.png" />
 </widget>
